@@ -56,13 +56,32 @@ Developed as part of the **Centurion University B.Tech CSE Robotics (ROS with C+
 
 ---
 
+## 📸 Hardware Gallery & Visual Build Guide
+
+| Isometric Assembly | Top-Down Chassis View |
+|:---:|:---:|
+| ![Rover Assembly](docs/rover_full_assembly_isometric_view.jpeg) | ![Chassis Top View](docs/rover_chassis_top_down_view.jpeg) |
+| *Fully wired dual-wheel differential chassis with L298N & ESP32* | *Central power distribution & component layout* |
+
+| Front Radar & Proximity Sensors | Active Sensor Array | Undercarriage & Motors |
+|:---:|:---:|:---:|
+| ![Front Radar](docs/rover_front_radar_and_proximity_sensors.jpeg) | ![Active Array](docs/sensor_array_front_view_active_leds.jpeg) | ![Undercarriage](docs/rover_undercarriage_motors_and_caster.jpeg) |
+| *HC-SR04 Radar, IR Proximity, DHT11 & LDR* | *Front sensor cluster with status LEDs active* | *TT DC Geared Motors & Front Free Caster Wheel* |
+
+---
+
 ## 🗂️ Repository Structure
 
 ```
 Micro-ROS-Autonomous-Rover/
 ├── docs/
 │   ├── Micro-ROS Autonomous Rover Development (1).pdf   # Course specification & project requirements
-│   └── *.jpeg                                           # Hardware reference & chassis wiring photos
+│   ├── rover_full_assembly_isometric_view.jpeg          # Fully assembled rover chassis
+│   ├── rover_chassis_top_down_view.jpeg                 # Overhead component distribution view
+│   ├── rover_front_radar_and_proximity_sensors.jpeg     # Frontal obstacle sensor array
+│   ├── sensor_array_front_view_active_leds.jpeg         # Operational sensor array with active LEDs
+│   ├── rover_undercarriage_motors_and_caster.jpeg       # Bottom view: TT motors and caster wheel
+│   └── esp32_breadboard_pinout_wiring.jpeg              # ESP32 breadboard pin breakout view
 ├── firmware/
 │   ├── rover_web_telemetry/
 │   │   └── rover_web_telemetry.ino                      # Production firmware (PWM, SoftAP, Web Server, Smart Auto)
@@ -186,3 +205,4 @@ This runs an interactive sequence:
 
 ## 📜 License & Acknowledgments
 Developed for academic research and robotics education at **Centurion University of Technology and Management**. Open source under the **MIT License**.
+
