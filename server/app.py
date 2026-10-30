@@ -12,14 +12,14 @@ app = Flask(__name__, static_folder="static")
 # Shared state
 rover_data = {
     "temp": 28.5,
-    "hum": 88.0,
+    "hum": 85.0,
     "light": 1,
     "ir": 1,
     "distance": -1.0,
     "action": "STOPPED",
     "mode": "manual",
     "pwm": 0,
-    "speed": 120,
+    "speed": 200,
     "connected": False
 }
 
@@ -46,7 +46,7 @@ def serial_reader_thread():
                     if line:
                         parse_telemetry(line)
                 else:
-                    time.sleep(0.05)
+                    time.sleep(0.04)
         except Exception as e:
             print("Serial loop error:", e)
             rover_data["connected"] = False
@@ -54,7 +54,7 @@ def serial_reader_thread():
 
 def parse_telemetry(line):
     global rover_data
-    if "[TELEM]" in line or "Temp:" in line:
+    if "[TELEM]" in line:
         parts = line.split("|")
         for part in parts:
             part = part.strip()
@@ -68,25 +68,20 @@ def parse_telemetry(line):
                     val = part.split("Hum:")[1].replace("%", "").strip()
                     rover_data["hum"] = float(val)
                 except: pass
-            elif "LDR:" in part or "Light" in part:
-                rover_data["light"] = 1 if "BRIGHT" in part or "(1)" in part else 0
+            elif "Sonar:" in part:
                 try:
-                    val = part.split(":")[1].strip()
-                    rover_data["light"] = int(val)
+                    val = part.split("Sonar:")[1].replace("cm", "").strip()
+                    rover_data["distance"] = float(val)
                 except: pass
             elif "IR:" in part:
-                rover_data["ir"] = 0 if "OBSTACLE" in part or "(0)" in part else 1
                 try:
-                    val = part.split(":")[1].strip()
+                    val = part.split("IR:")[1].strip()
                     rover_data["ir"] = int(val)
                 except: pass
-            elif "Sonar" in part:
+            elif "LDR:" in part:
                 try:
-                    val = part.split(":")[1].replace("cm", "").strip()
-                    if "OUT" in val or "NO_ECHO" in val:
-                        rover_data["distance"] = -1.0
-                    else:
-                        rover_data["distance"] = float(val)
+                    val = part.split("LDR:")[1].strip()
+                    rover_data["light"] = int(val)
                 except: pass
             elif "PWM:" in part:
                 try:
@@ -98,23 +93,36 @@ def parse_telemetry(line):
                     val = part.split("Spd:")[1].strip()
                     rover_data["speed"] = int(val)
                 except: pass
+            elif "Act:" in part:
+                try:
+                    val = part.split("Act:")[1].strip()
+                    rover_data["action"] = val
+                except: pass
+            elif "Mode:" in part:
+                try:
+                    val = part.split("Mode:")[1].strip()
+                    rover_data["mode"] = val
+                except: pass
 
 @app.route("/")
 def index():
     return send_from_directory("static", "index.html")
 
 @app.route("/api/telemetry")
+@app.route("/telemetry")
 def get_telemetry():
     return jsonify(rover_data)
 
 @app.route("/api/drive")
+@app.route("/drive")
 def drive_command():
     direction = request.args.get("dir", "x")
-    speed = request.args.get("spd", str(rover_data.get("speed", 120)))
+    speed = request.args.get("spd", str(rover_data.get("speed", 200)))
     with ser_lock:
         if ser_conn and ser_conn.is_open:
             try:
-                ser_conn.write(f"{direction}\n".encode("utf-8"))
+                cmd_str = f"{direction} {speed}\n" if direction != 'x' else "x\n"
+                ser_conn.write(cmd_str.encode("utf-8"))
                 if direction == 'f': rover_data["action"] = "FORWARD"
                 elif direction == 'b': rover_data["action"] = "BACKWARD"
                 elif direction == 'l': rover_data["action"] = "TURNING LEFT"
@@ -126,21 +134,27 @@ def drive_command():
     return jsonify({"status": "offline"}), 503
 
 @app.route("/api/speed")
+@app.route("/speed")
 def set_speed():
-    spd = request.args.get("v", "120")
+    spd = request.args.get("v", "200")
     try:
-        rover_data["speed"] = max(60, min(255, int(spd)))
+        val = max(140, min(255, int(spd)))
+        rover_data["speed"] = val
+        with ser_lock:
+            if ser_conn and ser_conn.is_open:
+                ser_conn.write(f"spd {val}\n".encode("utf-8"))
     except: pass
     return jsonify({"status": "ok", "speed": rover_data["speed"]})
 
 @app.route("/api/mode")
+@app.route("/mode")
 def set_mode():
     mode = request.args.get("m", "manual")
     rover_data["mode"] = mode
     with ser_lock:
         if ser_conn and ser_conn.is_open:
             try:
-                ser_conn.write(b"c\n")
+                ser_conn.write(f"m {mode}\n".encode("utf-8"))
             except: pass
     return jsonify({"status": "ok", "mode": mode})
 
