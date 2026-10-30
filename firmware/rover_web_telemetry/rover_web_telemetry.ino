@@ -67,6 +67,14 @@ unsigned long lastSensorReadMs = 0;
 
 // Autonomous Navigation States
 enum AutoState {
+  AUTO_INIT_SCAN_FRONT,
+  AUTO_INIT_TURN_RIGHT,
+  AUTO_INIT_SCAN_RIGHT,
+  AUTO_INIT_TURN_REAR,
+  AUTO_INIT_SCAN_REAR,
+  AUTO_INIT_TURN_LEFT,
+  AUTO_INIT_SCAN_LEFT,
+  AUTO_INIT_ALIGN_BEST,
   AUTO_CRUISE,
   AUTO_BACKUP,
   AUTO_ROTATE_LEFT,
@@ -76,10 +84,18 @@ enum AutoState {
   AUTO_ROUTING_TURN,
   AUTO_DEADEND_TURN
 };
-AutoState autoState = AUTO_CRUISE;
+AutoState autoState = AUTO_INIT_SCAN_FRONT;
 unsigned long autoStateTimer = 0;
 float scanDistLeft = 0.0;
 float scanDistRight = 0.0;
+
+// 360-degree Environmental Survey Data
+float dist360_Front = 0.0;
+float dist360_Right = 0.0;
+float dist360_Rear  = 0.0;
+float dist360_Left  = 0.0;
+int best360Sector   = 0; // 0=Front, 1=Right, 2=Rear, 3=Left
+unsigned long alignTurnDuration = 0;
 
 // ======================= MOTOR CONTROL & RAMPING =======================
 int targetPWM_R1 = 0, targetPWM_R2 = 0;
@@ -192,13 +208,143 @@ void updateSensors() {
 }
 
 // ======================= SMART MULTI-DIRECTIONAL AUTONOMOUS LOGIC =======================
-// Dynamically adjusts cruising speed according to forward gap and clearance (smooth acceleration / deceleration).
-// When an obstacle is detected, gently rotates to scan Left and Right clearance, evaluates the best open gap,
-// and routes the rover into the widest corridor.
+// 1. Initial 360-Degree Environmental Survey:
+//    When Autonomous Mode starts, the rover stands and slowly surveys all 4 cardinal quadrants (360°),
+//    determines the largest open space in the entire room, aligns itself directly toward it, and cruises.
+// 2. Dynamic Gap-Proportional Speed Adaptation:
+//    Continuously scales throttle based on corridor clearance (smooth acceleration / deceleration).
+// 3. Reactive Obstacle Avoidance:
+//    Scans Left and Right if an obstacle appears mid-mission, and navigates toward the widest corridor.
 void handleAutonomousBehavior() {
   unsigned long now = millis();
 
   switch (autoState) {
+    // ----------------- 360-DEGREE INITIAL RADAR SURVEY -----------------
+    case AUTO_INIT_SCAN_FRONT: {
+      stopRover();
+      currentAction = "360° SURVEY: PINGING FRONT";
+      if (now - autoStateTimer >= 150) {
+        float d = readUltrasonic();
+        dist360_Front = (d > 0) ? d : 300.0;
+        currentAction = "FRONT: " + String((int)dist360_Front) + "cm | SURVEYING RIGHT";
+        autoState = AUTO_INIT_TURN_RIGHT;
+        autoStateTimer = now;
+      }
+      break;
+    }
+
+    case AUTO_INIT_TURN_RIGHT: {
+      // Gently rotate 90° to the Right
+      spinRight(TURN_PWM);
+      if (now - autoStateTimer >= 460) {
+        stopRover();
+        autoState = AUTO_INIT_SCAN_RIGHT;
+        autoStateTimer = now;
+      }
+      break;
+    }
+
+    case AUTO_INIT_SCAN_RIGHT: {
+      stopRover();
+      currentAction = "360° SURVEY: PINGING RIGHT";
+      if (now - autoStateTimer >= 120) {
+        float d = readUltrasonic();
+        dist360_Right = (d > 0) ? d : 300.0;
+        currentAction = "RIGHT: " + String((int)dist360_Right) + "cm | SURVEYING REAR";
+        autoState = AUTO_INIT_TURN_REAR;
+        autoStateTimer = now;
+      }
+      break;
+    }
+
+    case AUTO_INIT_TURN_REAR: {
+      // Gently rotate 90° to face the Rear (180°)
+      spinRight(TURN_PWM);
+      if (now - autoStateTimer >= 460) {
+        stopRover();
+        autoState = AUTO_INIT_SCAN_REAR;
+        autoStateTimer = now;
+      }
+      break;
+    }
+
+    case AUTO_INIT_SCAN_REAR: {
+      stopRover();
+      currentAction = "360° SURVEY: PINGING REAR";
+      if (now - autoStateTimer >= 120) {
+        float d = readUltrasonic();
+        dist360_Rear = (d > 0) ? d : 300.0;
+        currentAction = "REAR: " + String((int)dist360_Rear) + "cm | SURVEYING LEFT";
+        autoState = AUTO_INIT_TURN_LEFT;
+        autoStateTimer = now;
+      }
+      break;
+    }
+
+    case AUTO_INIT_TURN_LEFT: {
+      // Gently rotate 90° to face the Left (270°)
+      spinRight(TURN_PWM);
+      if (now - autoStateTimer >= 460) {
+        stopRover();
+        autoState = AUTO_INIT_SCAN_LEFT;
+        autoStateTimer = now;
+      }
+      break;
+    }
+
+    case AUTO_INIT_SCAN_LEFT: {
+      stopRover();
+      currentAction = "360° SURVEY: PINGING LEFT";
+      if (now - autoStateTimer >= 120) {
+        float d = readUltrasonic();
+        dist360_Left = (d > 0) ? d : 300.0;
+
+        // Evaluate 360-degree survey: find winning sector
+        float maxD = dist360_Front;
+        best360Sector = 0; // Front
+        if (dist360_Right > maxD) { maxD = dist360_Right; best360Sector = 1; }
+        if (dist360_Rear > maxD)  { maxD = dist360_Rear;  best360Sector = 2; }
+        if (dist360_Left > maxD)  { maxD = dist360_Left;  best360Sector = 3; }
+
+        // Align toward winning sector from current Left (270°) heading:
+        if (best360Sector == 3) {
+          // Left won: already facing Left!
+          currentAction = "360° BEST: LEFT (" + String((int)maxD) + "cm) -> CRUISING";
+          autoState = AUTO_CRUISE;
+        } else {
+          autoState = AUTO_INIT_ALIGN_BEST;
+          autoStateTimer = now;
+          if (best360Sector == 0) {
+            // Front: spin Right 90°
+            spinRight(TURN_PWM);
+            alignTurnDuration = 460;
+            currentAction = "360° BEST: FRONT (" + String((int)maxD) + "cm) -> ALIGNING";
+          } else if (best360Sector == 1) {
+            // Right: spin Right 180°
+            spinRight(TURN_PWM);
+            alignTurnDuration = 920;
+            currentAction = "360° BEST: RIGHT (" + String((int)maxD) + "cm) -> ALIGNING";
+          } else if (best360Sector == 2) {
+            // Rear: spin Left 90°
+            spinLeft(TURN_PWM);
+            alignTurnDuration = 460;
+            currentAction = "360° BEST: REAR (" + String((int)maxD) + "cm) -> ALIGNING";
+          }
+        }
+      }
+      break;
+    }
+
+    case AUTO_INIT_ALIGN_BEST: {
+      if (now - autoStateTimer >= alignTurnDuration) {
+        stopRover();
+        currentAction = "360° ALIGNED! CRUISING";
+        autoState = AUTO_CRUISE;
+      }
+      break;
+    }
+
+    // ----------------- DYNAMIC ADAPTIVE CRUISE -----------------
     case AUTO_CRUISE: {
       // Check for obstacle: distance <= 24cm or IR proximity triggered
       bool blocked = (currentDistance > 0 && currentDistance <= 24.0) || (currentIR == 0);
@@ -360,7 +506,8 @@ void processSerialInput() {
       if (val >= MIN_PWM && val <= MAX_PWM) manualSpeed = val;
     } else if (cmd.startsWith("m auto")) {
       currentMode = MODE_AUTONOMOUS;
-      autoState = AUTO_CRUISE;
+      autoState = AUTO_INIT_SCAN_FRONT;
+      autoStateTimer = millis();
     } else if (cmd.startsWith("m manual")) {
       currentMode = MODE_MANUAL;
       stopRover();
@@ -853,7 +1000,8 @@ void handleMode() {
     String m = server.arg("m");
     if (m == "auto") {
       currentMode = MODE_AUTONOMOUS;
-      autoState = AUTO_CRUISE;
+      autoState = AUTO_INIT_SCAN_FRONT;
+      autoStateTimer = millis();
     } else {
       currentMode = MODE_MANUAL;
       stopRover();
