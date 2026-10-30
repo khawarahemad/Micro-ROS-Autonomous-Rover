@@ -116,14 +116,20 @@ void setupMotors() {
   ledcWrite(MOTOR_L_IN4, 0);
 }
 
-// Gentle progressive acceleration / deceleration engine
+// Progressive acceleration / deceleration engine
 void updateMotorRamp() {
   if (millis() - lastRampMs < RAMP_INTERVAL_MS) return;
   lastRampMs = millis();
 
   auto ramp = [](int &curr, int target) {
-    if (curr < target) curr = min(target, curr + RAMP_STEP_UP);
-    else if (curr > target) curr = max(target, curr - RAMP_STEP_DOWN);
+    if (target > 0) {
+      if (curr == 0) curr = MIN_PWM; // Instant torque pickup from 0 without deadband lag!
+      else if (curr < target) curr = min(target, curr + RAMP_STEP_UP);
+      else if (curr > target) curr = max(target, curr - RAMP_STEP_DOWN);
+    } else {
+      if (curr <= MIN_PWM) curr = 0; // Immediate clean stop at stall boundary
+      else curr = max(0, curr - RAMP_STEP_DOWN);
+    }
   };
 
   ramp(currentPWM_R1, targetPWM_R1);
@@ -162,7 +168,7 @@ void driveBackward(int speed) {
 }
 
 void spinLeft(int speed) {
-  int spd = constrain(speed, MIN_PWM, MAX_PWM);
+  int spd = constrain(speed, MIN_PWM, 165); // Gentle, smooth, not rushed!
   targetPWM_R1 = spd; targetPWM_R2 = 0;
   targetPWM_L3 = 0;   targetPWM_L4 = spd;
   currentAction = "TURNING LEFT";
@@ -170,7 +176,7 @@ void spinLeft(int speed) {
 }
 
 void spinRight(int speed) {
-  int spd = constrain(speed, MIN_PWM, MAX_PWM);
+  int spd = constrain(speed, MIN_PWM, 165); // Gentle, smooth, not rushed!
   targetPWM_R1 = 0;   targetPWM_R2 = spd;
   targetPWM_L3 = spd; targetPWM_L4 = 0;
   currentAction = "TURNING RIGHT";
@@ -534,210 +540,204 @@ const char DASHBOARD_HTML[] PROGMEM = R"rawliteral(
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
       background: radial-gradient(circle at 50% 10%, #172554 0%, var(--bg) 80%);
-      color: var(--text); min-height: 100vh; padding: 12px 16px 24px;
+      color: var(--text); min-height: 100vh; padding: 8px 10px 16px;
       display: flex; flex-direction: column; align-items: center;
     }
-    .container { width: 100%; max-width: 1200px; }
+    .container { width: 100%; max-width: 1100px; }
     
+    /* Compact Top Header */
     header {
       background: var(--card); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
-      border: 1px solid var(--border); border-radius: 14px; padding: 12px 18px;
-      display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;
-      box-shadow: 0 8px 30px rgba(0,0,0,0.5); flex-wrap: wrap; gap: 10px;
+      border: 1px solid var(--border); border-radius: 12px; padding: 8px 14px;
+      display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;
     }
-    .brand { display: flex; align-items: center; gap: 10px; }
-    .brand .logo { font-size: 1.6rem; }
+    .brand { display: flex; align-items: center; gap: 8px; }
+    .brand .logo { font-size: 1.3rem; }
     .brand h1 {
-      font-size: 1.15rem; font-weight: 700; letter-spacing: 0.5px;
+      font-size: 0.95rem; font-weight: 700; letter-spacing: 0.5px;
       background: linear-gradient(135deg, #e0f2fe, #38bdf8);
       -webkit-background-clip: text; -webkit-text-fill-color: transparent;
     }
-    .brand .sub { font-size: 0.68rem; color: var(--muted); letter-spacing: 0.8px; text-transform: uppercase; }
-    
-    .hud-badges { display: flex; align-items: center; gap: 8px; }
     .pill {
-      display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px;
-      border-radius: 30px; font-size: 0.72rem; font-weight: 700; letter-spacing: 0.5px;
-      text-transform: uppercase; border: 1px solid transparent;
+      display: inline-flex; align-items: center; gap: 5px; padding: 3px 8px;
+      border-radius: 20px; font-size: 0.65rem; font-weight: 700; text-transform: uppercase;
+      background: rgba(16,185,129,0.15); border: 1px solid rgba(16,185,129,0.4); color: #34d399;
     }
-    .pill .dot { width: 8px; height: 8px; border-radius: 50%; }
-    .pill.on { background: rgba(16,185,129,0.15); border-color: rgba(16,185,129,0.4); color: #34d399; }
-    .pill.on .dot { background: #10b981; box-shadow: 0 0 8px #10b981; animation: pdot 1.5s infinite; }
-    .pill.off { background: rgba(239,68,68,0.15); border-color: rgba(239,68,68,0.4); color: #f87171; }
-    .pill.off .dot { background: #ef4444; }
-    @keyframes pdot { 0%,100%{opacity:1;transform:scale(1)}50%{opacity:0.3;transform:scale(0.85)} }
+    .pill .dot { width: 6px; height: 6px; border-radius: 50%; background: #10b981; }
 
-    .dash { display: grid; grid-template-columns: 1fr 340px; gap: 16px; }
-    @media(max-width: 880px) { .dash { grid-template-columns: 1fr; } }
+    /* Responsive Grid Layout */
+    .dash { display: grid; grid-template-columns: 1fr 340px; gap: 12px; }
+    
+    @media(max-width: 768px) {
+      .dash { display: flex; flex-direction: column; gap: 8px; }
+      .desktop-only-chart { order: 2; }
+      .cockpit-panel { order: 1; }
+    }
 
-    /* Sensor Grid */
-    .sensors { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; margin-bottom: 16px; }
+    /* Micro-Chip Sensor Ribbon */
+    .sensors {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(95px, 1fr));
+      gap: 6px; margin-bottom: 8px;
+    }
     .sc {
       background: var(--card); backdrop-filter: blur(12px); border: 1px solid var(--border);
-      border-radius: 12px; padding: 12px; transition: all 0.2s; position: relative; overflow: hidden;
+      border-radius: 10px; padding: 6px 8px; text-align: center;
     }
-    .sc-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
-    .sc-lbl { font-size: 0.68rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
-    .sc-ico { font-size: 0.95rem; }
-    .sc-val { font-size: 1.55rem; font-weight: 800; color: #f1f5f9; letter-spacing: -0.5px; }
-    .sc-val .u { font-size: 0.8rem; font-weight: 500; color: var(--muted); }
-    .sp { display: inline-block; font-size: 0.68rem; font-weight: 700; padding: 2px 8px; border-radius: 12px; margin-top: 6px; }
+    .sc-lbl { font-size: 0.58rem; font-weight: 600; color: var(--muted); text-transform: uppercase; }
+    .sc-val { font-size: 1.15rem; font-weight: 800; color: #f1f5f9; margin: 1px 0; }
+    .sc-val .u { font-size: 0.68rem; font-weight: 500; color: var(--muted); }
+    .sp { display: inline-block; font-size: 0.58rem; font-weight: 700; padding: 1px 6px; border-radius: 8px; }
     .sp.ok { background: rgba(16,185,129,0.18); color: #34d399; border: 1px solid rgba(16,185,129,0.3); }
     .sp.warn { background: rgba(245,158,11,0.18); color: #fbbf24; border: 1px solid rgba(245,158,11,0.3); }
-    .sp.bad { background: rgba(239,68,68,0.22); color: #f87171; border: 1px solid rgba(239,68,68,0.5); animation: af 1s infinite alternate; }
-    @keyframes af { from{box-shadow:0 0 4px var(--red)}to{box-shadow:0 0 14px var(--red)} }
-
-    /* Chart */
-    .chart-box {
-      background: var(--card); backdrop-filter: blur(12px); border: 1px solid var(--border);
-      border-radius: 14px; padding: 14px 16px; box-shadow: 0 6px 24px rgba(0,0,0,0.4);
-    }
-    .ph { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
-    .pt { font-size: 0.82rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.7px; color: var(--accent); display: flex; align-items: center; gap: 6px; }
-    .cw { position: relative; height: 230px; width: 100%; }
+    .sp.bad { background: rgba(239,68,68,0.22); color: #f87171; border: 1px solid rgba(239,68,68,0.5); }
 
     /* Cockpit */
     .cockpit {
       background: var(--card); backdrop-filter: blur(12px); border: 1px solid var(--border);
-      border-radius: 14px; padding: 16px; display: flex; flex-direction: column; gap: 12px;
-      box-shadow: 0 6px 24px rgba(0,0,0,0.4);
+      border-radius: 12px; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px;
     }
+    
     .act-box {
       background: rgba(15,23,42,0.9); border: 1px solid rgba(56,189,248,0.25);
-      border-radius: 10px; padding: 8px 12px; text-align: center;
+      border-radius: 8px; padding: 6px 10px; text-align: center;
     }
-    .act-box .lbl { font-size: 0.65rem; text-transform: uppercase; color: var(--muted); letter-spacing: 0.8px; }
-    .act-box .val { font-size: 1.15rem; font-weight: 800; color: var(--accent); margin-top: 2px; }
+    .act-box .lbl { font-size: 0.58rem; text-transform: uppercase; color: var(--muted); }
+    .act-box .val { font-size: 0.95rem; font-weight: 800; color: var(--accent); }
 
-    /* Speed Control */
+    /* Compact Speed Slider */
     .speed-panel {
       background: rgba(15,23,42,0.8); border: 1px solid var(--border);
-      border-radius: 10px; padding: 12px; text-align: center;
+      border-radius: 8px; padding: 8px 10px; text-align: center;
     }
-    .speed-panel .title { font-size: 0.68rem; text-transform: uppercase; color: var(--muted); letter-spacing: 0.8px; margin-bottom: 6px; }
-    .speed-big { font-size: 1.7rem; font-weight: 800; color: #10b981; }
-    .speed-pct { font-size: 0.72rem; color: var(--muted); margin-bottom: 8px; }
-    input[type=range] { -webkit-appearance: none; width: 92%; height: 8px; border-radius: 4px; background: #1e293b; outline: none; margin-bottom: 8px; }
+    .speed-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
+    .speed-title { font-size: 0.65rem; text-transform: uppercase; color: var(--muted); }
+    .speed-badge { font-size: 0.8rem; font-weight: 800; color: #10b981; }
+    input[type=range] { -webkit-appearance: none; width: 100%; height: 6px; border-radius: 3px; background: #1e293b; outline: none; margin: 4px 0; }
     input[type=range]::-webkit-slider-thumb {
-      -webkit-appearance: none; width: 24px; height: 24px; border-radius: 50%;
-      background: var(--accent); cursor: pointer; box-shadow: 0 0 10px var(--glow); border: 2px solid #0c4a6e;
+      -webkit-appearance: none; width: 20px; height: 20px; border-radius: 50%;
+      background: var(--accent); cursor: pointer; border: 2px solid #0c4a6e;
     }
-    .presets { display: flex; justify-content: center; gap: 6px; margin-top: 6px; }
+    .presets { display: flex; justify-content: space-around; gap: 4px; margin-top: 2px; }
     .preset-btn {
-      background: #1e293b; border: 1px solid #334155; color: var(--text); padding: 4px 10px;
-      border-radius: 8px; font-size: 0.68rem; font-weight: 600; cursor: pointer; transition: 0.1s;
+      background: #1e293b; border: 1px solid #334155; color: var(--text); padding: 2px 8px;
+      border-radius: 6px; font-size: 0.62rem; font-weight: 600; cursor: pointer;
     }
     .preset-btn:active { background: var(--accent); color: #000; }
 
-    /* Modes */
-    .modes { display: flex; gap: 6px; background: rgba(15,23,42,0.8); padding: 4px; border-radius: 10px; border: 1px solid var(--border); }
+    /* Mode Buttons */
+    .modes { display: flex; gap: 6px; }
     .mt {
-      flex: 1; padding: 8px 10px; border-radius: 6px; border: none; font-size: 0.72rem;
-      font-weight: 700; color: var(--muted); background: transparent; cursor: pointer; transition: 0.2s;
+      flex: 1; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--border);
+      font-size: 0.68rem; font-weight: 700; color: var(--muted); background: rgba(15,23,42,0.8); cursor: pointer;
     }
-    .mt.active { background: var(--accent); color: #04101e; box-shadow: 0 2px 8px var(--glow); }
+    .mt.active { background: var(--accent); color: #04101e; border-color: var(--accent); box-shadow: 0 0 10px var(--glow); }
 
-    /* D-PAD */
-    .dpad { display: flex; flex-direction: column; align-items: center; gap: 7px; margin: 4px auto; }
-    .dr { display: flex; gap: 7px; justify-content: center; }
+    /* Virtual D-Pad (Directly Visible, Never Cut Off) */
+    .dpad { display: flex; flex-direction: column; align-items: center; gap: 6px; margin: 2px auto; }
+    .dr { display: flex; gap: 6px; justify-content: center; }
     .db {
-      width: 66px; height: 58px; background: linear-gradient(180deg, #1e293b, #0f172a);
-      border: 1px solid rgba(71,85,105,0.6); border-radius: 12px; color: #f1f5f9;
-      font-size: 1.3rem; cursor: pointer; display: flex; align-items: center; justify-content: center;
-      user-select: none; transition: all 0.1s; box-shadow: 0 4px 8px rgba(0,0,0,0.3);
+      width: 66px; height: 54px; background: linear-gradient(180deg, #1e293b, #0f172a);
+      border: 1px solid rgba(71,85,105,0.6); border-radius: 10px; color: #f1f5f9;
+      font-size: 1.25rem; cursor: pointer; display: flex; align-items: center; justify-content: center;
+      user-select: none; transition: all 0.1s;
     }
-    .db:active, .db.active { background: linear-gradient(180deg, var(--accent), #0284c7); color: #000; box-shadow: 0 0 14px var(--glow); transform: scale(0.94); }
+    .db:active, .db.active { background: linear-gradient(180deg, var(--accent), #0284c7); color: #000; transform: scale(0.95); }
     .db.stp { background: linear-gradient(180deg, #7f1d1d, #450a0a); border-color: rgba(239,68,68,0.6); color: #fca5a5; }
     .db.stp:active { background: #dc2626; color: #fff; }
 
-    .hints { font-size: 0.68rem; color: var(--muted); text-align: center; line-height: 1.4; background: rgba(15,23,42,0.5); border-radius: 6px; padding: 6px; }
-    .hints kbd { background: #1e293b; border: 1px solid #334155; border-radius: 3px; padding: 1px 4px; color: var(--accent); font-weight: 700; }
+    .hints { font-size: 0.62rem; color: var(--muted); text-align: center; }
+    .hints kbd { background: #1e293b; border: 1px solid #334155; border-radius: 3px; padding: 1px 3px; color: var(--accent); }
+
+    /* Chart Container & Collapsible on Mobile */
+    .chart-box {
+      background: var(--card); backdrop-filter: blur(12px); border: 1px solid var(--border);
+      border-radius: 12px; padding: 10px 14px;
+    }
+    .ph { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+    .pt { font-size: 0.72rem; font-weight: 700; text-transform: uppercase; color: var(--accent); }
+    .cw { position: relative; height: 180px; width: 100%; }
+
+    @media(max-width: 768px) {
+      .cw { height: 130px; }
+      .chart-toggle-btn {
+        background: #1e293b; border: 1px solid var(--border); color: var(--accent);
+        padding: 5px 10px; border-radius: 8px; font-size: 0.68rem; font-weight: 700;
+        cursor: pointer; width: 100%; text-align: center; margin-top: 4px;
+      }
+    }
   </style>
 </head>
 <body>
 <div class="container">
+  <!-- Topbar -->
   <header>
     <div class="brand">
       <span class="logo">🤖</span>
-      <div>
-        <h1>MICRO-ROS AUTONOMOUS ROVER</h1>
-        <div class="sub">Centurion University · B.Tech Robotics | Real-Time Telemetry</div>
-      </div>
+      <div><h1>MICRO-ROS ROVER</h1></div>
     </div>
-    <div class="hud-badges">
-      <div class="pill on" id="conn-pill"><span class="dot"></span><span id="conn-text">ROVER ACTIVE</span></div>
-    </div>
+    <div class="pill"><span class="dot"></span><span>ONLINE</span></div>
   </header>
 
+  <!-- Main Viewport -->
   <div class="dash">
-    <!-- LEFT: Sensors & Charts -->
-    <div>
+    
+    <!-- Cockpit & Driving Controls (Primary View on Mobile) -->
+    <div class="cockpit cockpit-panel">
+      <!-- Sensor Micro-Chips Ribbon -->
       <div class="sensors">
         <div class="sc">
-          <div class="sc-top"><span class="sc-lbl">Temperature</span><span class="sc-ico">🌡️</span></div>
+          <div class="sc-lbl">TEMP</div>
           <div class="sc-val" id="v-temp">-- <span class="u">°C</span></div>
-          <span class="sp ok" id="p-temp">NOMINAL</span>
+          <span class="sp ok" id="p-temp">OK</span>
         </div>
         <div class="sc">
-          <div class="sc-top"><span class="sc-lbl">Humidity</span><span class="sc-ico">💧</span></div>
+          <div class="sc-lbl">HUM</div>
           <div class="sc-val" id="v-hum">-- <span class="u">%</span></div>
-          <span class="sp ok" id="p-hum">OPTIMAL</span>
+          <span class="sp ok" id="p-hum">OK</span>
         </div>
         <div class="sc">
-          <div class="sc-top"><span class="sc-lbl">Sonar Radar</span><span class="sc-ico">🎯</span></div>
+          <div class="sc-lbl">RADAR</div>
           <div class="sc-val" id="v-sonar">-- <span class="u">cm</span></div>
-          <span class="sp ok" id="p-sonar">CLEAR PATH</span>
+          <span class="sp ok" id="p-sonar">CLEAR</span>
         </div>
         <div class="sc">
-          <div class="sc-top"><span class="sc-lbl">IR Collision</span><span class="sc-ico">🛡️</span></div>
-          <div class="sc-val" id="v-ir" style="font-size:1.25rem">CLEAR</div>
-          <span class="sp ok" id="p-ir">NO HAZARD</span>
+          <div class="sc-lbl">IR PROX</div>
+          <div class="sc-val" id="v-ir" style="font-size:0.95rem">CLEAR</div>
+          <span class="sp ok" id="p-ir">SAFE</span>
         </div>
         <div class="sc">
-          <div class="sc-top"><span class="sc-lbl">Ambient Light</span><span class="sc-ico" id="ico-ldr">☀️</span></div>
-          <div class="sc-val" id="v-ldr" style="font-size:1.25rem">BRIGHT</div>
-          <span class="sp ok" id="p-ldr">DAYLIGHT</span>
+          <div class="sc-lbl">LIGHT</div>
+          <div class="sc-val" id="v-ldr" style="font-size:0.95rem">☀️ DAY</div>
+          <span class="sp ok" id="p-ldr">BRIGHT</span>
         </div>
       </div>
 
-      <div class="chart-box">
-        <div class="ph">
-          <div class="pt">📈 Real-Time Environmental Waveform</div>
-          <div style="font-size:0.68rem; color:var(--muted)">Sampling: 250ms</div>
-        </div>
-        <div class="cw"><canvas id="envChart"></canvas></div>
-      </div>
-    </div>
-
-    <!-- RIGHT: Cockpit & Controls -->
-    <div class="cockpit">
-      <div class="pt" style="justify-content:center">🎮 Flight Control Cockpit</div>
-      
+      <!-- Real-Time Actuator Status -->
       <div class="act-box">
-        <div class="lbl">Actuator Feedback</div>
+        <div class="lbl">ROVER STATUS</div>
         <div class="val" id="act-text">STOPPED</div>
       </div>
 
-      <!-- Speed / Accelerator -->
+      <!-- Speed Accelerator & Mode Row -->
+      <div class="modes">
+        <button class="mt active" id="m-man" onclick="setMode('manual')">✋ Manual</button>
+        <button class="mt" id="m-auto" onclick="setMode('auto')">🤖 Smart Auto (360°)</button>
+      </div>
+
       <div class="speed-panel">
-        <div class="title">⚡ Accelerator / Motor Speed</div>
-        <div class="speed-big" id="spd-num">200</div>
-        <div class="speed-pct" id="spd-pct">78% Power</div>
+        <div class="speed-header">
+          <span class="speed-title">⚡ Speed Throttle</span>
+          <span class="speed-badge" id="spd-num">200 PWM</span>
+        </div>
         <input type="range" id="spd-slider" min="140" max="255" value="200" oninput="onSpeedChange(this.value)">
         <div class="presets">
-          <button class="preset-btn" onclick="setSpeedPreset(160)">🐢 Slow (160)</button>
-          <button class="preset-btn" onclick="setSpeedPreset(200)">🚗 Cruise (200)</button>
-          <button class="preset-btn" onclick="setSpeedPreset(255)">⚡ Turbo (255)</button>
+          <button class="preset-btn" onclick="setSpeedPreset(160)">Slow (160)</button>
+          <button class="preset-btn" onclick="setSpeedPreset(200)">Cruise (200)</button>
+          <button class="preset-btn" onclick="setSpeedPreset(255)">Turbo (255)</button>
         </div>
       </div>
 
-      <!-- Mode Switch -->
-      <div class="modes">
-        <button class="mt active" id="m-man" onclick="setMode('manual')">✋ Manual Pilot</button>
-        <button class="mt" id="m-auto" onclick="setMode('auto')">🤖 Smart Auto</button>
-      </div>
-
-      <!-- Virtual D-Pad -->
+      <!-- Tactile D-PAD (100% Mobile Viewport Friendly) -->
       <div class="dpad">
         <div class="dr">
           <button class="db" id="k-f" onpointerdown="sendDrive('f')" onpointerup="sendDrive('x')" onpointercancel="sendDrive('x')">▲</button>
@@ -752,11 +752,17 @@ const char DASHBOARD_HTML[] PROGMEM = R"rawliteral(
         </div>
       </div>
 
-      <div class="hints">
-        Drive: <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> or <kbd>▲</kbd><kbd>◀</kbd><kbd>▼</kbd><kbd>▶</kbd><br>
-        Brake: <kbd>SPACE</kbd> &middot; Speed: <kbd>+</kbd><kbd>-</kbd>
-      </div>
+      <div class="hints">Keys: <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> · Brake: <kbd>SPACE</kbd> · Speed: <kbd>+</kbd><kbd>-</kbd></div>
     </div>
+
+    <!-- Live Chart -->
+    <div class="chart-box desktop-only-chart">
+      <div class="ph">
+        <div class="pt">📈 Environmental Waveform (250ms)</div>
+      </div>
+      <div class="cw"><canvas id="envChart"></canvas></div>
+    </div>
+
   </div>
 </div>
 
@@ -774,21 +780,21 @@ const char DASHBOARD_HTML[] PROGMEM = R"rawliteral(
       data: {
         labels: [],
         datasets: [
-          { label: 'Temperature (°C)', borderColor: '#38bdf8', backgroundColor: 'rgba(56,189,248,0.1)', borderWidth: 2, tension: 0.3, pointRadius: 1, fill: true, data: [], yAxisID: 'y' },
-          { label: 'Humidity (%)', borderColor: '#10b981', backgroundColor: 'rgba(16,185,129,0.08)', borderWidth: 2, tension: 0.3, pointRadius: 1, fill: true, data: [], yAxisID: 'y1' }
+          { label: 'Temp °C', borderColor: '#38bdf8', backgroundColor: 'rgba(56,189,248,0.1)', borderWidth: 1.5, tension: 0.3, pointRadius: 1, fill: true, data: [], yAxisID: 'y' },
+          { label: 'Hum %', borderColor: '#10b981', backgroundColor: 'rgba(16,185,129,0.08)', borderWidth: 1.5, tension: 0.3, pointRadius: 1, fill: true, data: [], yAxisID: 'y1' }
         ]
       },
       options: {
         responsive: true, maintainAspectRatio: false, animation: false,
         scales: {
-          x: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#64748b', font: { size: 9 } } },
-          y: { grid: { color: 'rgba(56,189,248,0.1)' }, ticks: { color: '#38bdf8', font: { size: 9 } }, suggestedMin: 20, suggestedMax: 40 },
-          y1: { position: 'right', grid: { drawOnChartArea: false }, ticks: { color: '#10b981', font: { size: 9 } }, suggestedMin: 20, suggestedMax: 100 }
+          x: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#64748b', font: { size: 8 } } },
+          y: { grid: { color: 'rgba(56,189,248,0.1)' }, ticks: { color: '#38bdf8', font: { size: 8 } }, suggestedMin: 20, suggestedMax: 40 },
+          y1: { position: 'right', grid: { drawOnChartArea: false }, ticks: { color: '#10b981', font: { size: 8 } }, suggestedMin: 20, suggestedMax: 100 }
         },
-        plugins: { legend: { labels: { color: '#cbd5e1', font: { size: 10, weight: '600' }, boxWidth: 10 } } }
+        plugins: { legend: { labels: { color: '#cbd5e1', font: { size: 9, weight: '600' }, boxWidth: 8 } } }
       }
     });
-  } catch(e) { console.log('Chart load fallback:', e); }
+  } catch(e) { console.log('Chart fallback:', e); }
 
   function sendDrive(dir) {
     const url = baseAPI + '/drive?dir=' + dir + '&spd=' + currentSpeed;
@@ -805,7 +811,7 @@ const char DASHBOARD_HTML[] PROGMEM = R"rawliteral(
 
   function onSpeedChange(v) {
     currentSpeed = parseInt(v);
-    updateSpeedUI();
+    document.getElementById('spd-num').innerText = currentSpeed + ' PWM';
     fetch(baseAPI + '/speed?v=' + currentSpeed).catch(()=>{});
   }
 
@@ -814,22 +820,12 @@ const char DASHBOARD_HTML[] PROGMEM = R"rawliteral(
     onSpeedChange(val);
   }
 
-  function updateSpeedUI() {
-    const pct = Math.round(((currentSpeed - 140) / (255 - 140)) * 100);
-    document.getElementById('spd-num').innerText = currentSpeed;
-    document.getElementById('spd-pct').innerText = pct + '% Power';
-    const numEl = document.getElementById('spd-num');
-    if (pct < 35) numEl.style.color = '#10b981';
-    else if (pct < 70) numEl.style.color = '#f59e0b';
-    else numEl.style.color = '#ef4444';
-  }
-
   // Keyboard Driving
   let activeKey = null;
   window.addEventListener('keydown', e => {
     const k = e.key.toLowerCase();
-    if (k === '=' || k === '+') { currentSpeed = Math.min(255, currentSpeed + 15); document.getElementById('spd-slider').value = currentSpeed; updateSpeedUI(); fetch(baseAPI + '/speed?v='+currentSpeed).catch(()=>{}); return; }
-    if (k === '-') { currentSpeed = Math.max(140, currentSpeed - 15); document.getElementById('spd-slider').value = currentSpeed; updateSpeedUI(); fetch(baseAPI + '/speed?v='+currentSpeed).catch(()=>{}); return; }
+    if (k === '=' || k === '+') { currentSpeed = Math.min(255, currentSpeed + 15); setSpeedPreset(currentSpeed); return; }
+    if (k === '-') { currentSpeed = Math.max(140, currentSpeed - 15); setSpeedPreset(currentSpeed); return; }
     if (activeKey) return;
     if (k === 'w' || k === 'arrowup') { activeKey = 'f'; sendDrive('f'); hl('k-f', 1); }
     else if (k === 's' || k === 'arrowdown') { activeKey = 'b'; sendDrive('b'); hl('k-b', 1); }
@@ -851,57 +847,56 @@ const char DASHBOARD_HTML[] PROGMEM = R"rawliteral(
     if (el) el.classList.toggle('active', !!state);
   }
 
-  // Telemetry Poll
+  // Telemetry Poll (every 250ms)
   setInterval(() => {
     fetch(baseAPI + '/telemetry')
       .then(r => r.json())
       .then(d => {
-        document.getElementById('v-temp').innerHTML = d.temp.toFixed(1) + ' <span class="u">°C</span>';
-        document.getElementById('v-hum').innerHTML = d.hum.toFixed(1) + ' <span class="u">%</span>';
+        document.getElementById('v-temp').innerHTML = d.temp.toFixed(1) + '<span class="u">°C</span>';
+        document.getElementById('v-hum').innerHTML = d.hum.toFixed(1) + '<span class="u">%</span>';
         
         const sonarVal = document.getElementById('v-sonar');
         const sonarPill = document.getElementById('p-sonar');
         if (d.distance > 0) {
-          sonarVal.innerHTML = d.distance.toFixed(1) + ' <span class="u">cm</span>';
+          sonarVal.innerHTML = d.distance.toFixed(1) + '<span class="u">cm</span>';
           if (d.distance <= 15) {
-            sonarPill.className = 'sp bad'; sonarPill.innerText = 'HAZARD (<15cm)';
+            sonarPill.className = 'sp bad'; sonarPill.innerText = 'HAZARD';
           } else if (d.distance <= 35) {
             sonarPill.className = 'sp warn'; sonarPill.innerText = 'CAUTION';
           } else {
-            sonarPill.className = 'sp ok'; sonarPill.innerText = 'CLEAR PATH';
+            sonarPill.className = 'sp ok'; sonarPill.innerText = 'CLEAR';
           }
         } else {
-          sonarVal.innerHTML = '-- <span class="u">cm</span>';
-          sonarPill.className = 'sp warn'; sonarPill.innerText = 'SCANNING';
+          sonarVal.innerHTML = '--<span class="u">cm</span>';
+          sonarPill.className = 'sp warn'; sonarPill.innerText = 'SCAN';
         }
 
         const irVal = document.getElementById('v-ir');
         const irPill = document.getElementById('p-ir');
         if (d.ir === 0) {
-          irVal.innerText = 'OBSTACLE!'; irVal.style.color = '#ef4444';
-          irPill.className = 'sp bad'; irPill.innerText = 'PROX ALERT';
+          irVal.innerText = 'OBST!'; irVal.style.color = '#ef4444';
+          irPill.className = 'sp bad'; irPill.innerText = 'ALERT';
         } else {
           irVal.innerText = 'CLEAR'; irVal.style.color = '#f1f5f9';
-          irPill.className = 'sp ok'; irPill.innerText = 'NO HAZARD';
+          irPill.className = 'sp ok'; irPill.innerText = 'SAFE';
         }
 
         const ldrVal = document.getElementById('v-ldr');
-        const ldrIco = document.getElementById('ico-ldr');
         const ldrPill = document.getElementById('p-ldr');
         if (d.light === 1) {
-          ldrVal.innerText = 'BRIGHT'; ldrIco.innerText = '☀️';
-          ldrPill.className = 'sp ok'; ldrPill.innerText = 'DAYLIGHT';
+          ldrVal.innerText = '☀️ DAY';
+          ldrPill.className = 'sp ok'; ldrPill.innerText = 'BRIGHT';
         } else {
-          ldrVal.innerText = 'DARK'; ldrIco.innerText = '🌙';
-          ldrPill.className = 'sp warn'; ldrPill.innerText = 'LOW LIGHT';
+          ldrVal.innerText = '🌙 DARK';
+          ldrPill.className = 'sp warn'; ldrPill.innerText = 'LOW';
         }
 
         const actEl = document.getElementById('act-text');
         actEl.innerText = d.action;
-        if (d.action.includes('FORWARD') || d.action.includes('CRUISING')) actEl.style.color = '#10b981';
-        else if (d.action.includes('BACK') || d.action.includes('APPROACH')) actEl.style.color = '#f59e0b';
-        else if (d.action.includes('TURN')) actEl.style.color = '#38bdf8';
-        else if (d.action.includes('OBSTACLE')) actEl.style.color = '#ef4444';
+        if (d.action.includes('FORWARD') || d.action.includes('CRUISE') || d.action.includes('ALIGNED')) actEl.style.color = '#10b981';
+        else if (d.action.includes('BACK') || d.action.includes('APPROACH') || d.action.includes('SURVEY')) actEl.style.color = '#f59e0b';
+        else if (d.action.includes('TURN') || d.action.includes('LOOKING')) actEl.style.color = '#38bdf8';
+        else if (d.action.includes('OBSTACLE') || d.action.includes('DEAD END')) actEl.style.color = '#ef4444';
         else actEl.style.color = '#94a3b8';
 
         if (d.mode) {
@@ -911,7 +906,7 @@ const char DASHBOARD_HTML[] PROGMEM = R"rawliteral(
 
         if (chart) {
           const timeLabel = new Date().toLocaleTimeString().split(' ')[0];
-          if (chart.data.labels.length > 25) {
+          if (chart.data.labels.length > 20) {
             chart.data.labels.shift();
             chart.data.datasets[0].data.shift();
             chart.data.datasets[1].data.shift();
@@ -923,7 +918,7 @@ const char DASHBOARD_HTML[] PROGMEM = R"rawliteral(
         }
       })
       .catch(()=>{});
-  }, 300);
+  }, 250);
 </script>
 </body>
 </html>
