@@ -60,10 +60,20 @@ float currentDistance = -1.0;
 unsigned long lastSensorReadMs = 0;
 
 // Autonomous Navigation States
-enum AutoState { AUTO_CRUISE, AUTO_BACKUP, AUTO_TURN, AUTO_VERIFY };
+enum AutoState {
+  AUTO_CRUISE,
+  AUTO_BACKUP,
+  AUTO_ROTATE_LEFT,
+  AUTO_MEASURE_LEFT,
+  AUTO_ROTATE_RIGHT,
+  AUTO_MEASURE_RIGHT,
+  AUTO_ROUTING_TURN,
+  AUTO_DEADEND_TURN
+};
 AutoState autoState = AUTO_CRUISE;
 unsigned long autoStateTimer = 0;
-int autoTurnDir = 1; // 1 = right, -1 = left
+float scanDistLeft = 0.0;
+float scanDistRight = 0.0;
 
 // ======================= MOTOR CONTROL =======================
 void setupMotors() {
@@ -153,7 +163,9 @@ void updateSensors() {
   }
 }
 
-// ======================= SMART AUTONOMOUS LOGIC =======================
+// ======================= SMART MULTI-DIRECTIONAL AUTONOMOUS LOGIC =======================
+// Scans environment in multiple directions when blocked, determines the largest spatial gap,
+// and steers the rover directly toward the clearest corridor (or escapes 180° on dead ends).
 void handleAutonomousBehavior() {
   unsigned long now = millis();
 
@@ -164,7 +176,7 @@ void handleAutonomousBehavior() {
       
       if (blocked) {
         stopRover();
-        currentAction = "AUTO: OBSTACLE DETECTED";
+        currentAction = "OBSTACLE DETECTED";
         autoState = AUTO_BACKUP;
         autoStateTimer = now;
       } else {
@@ -183,49 +195,97 @@ void handleAutonomousBehavior() {
     }
 
     case AUTO_BACKUP: {
-      // Step 1: Reverse back for 380ms to gain turning clearance
+      // Step 1: Reverse back for 350ms to gain turning clearance
       driveBackward(180);
       currentAction = "AUTO: REVERSING";
+      if (now - autoStateTimer >= 350) {
+        stopRover();
+        autoState = AUTO_ROTATE_LEFT;
+        autoStateTimer = now;
+      }
+      break;
+    }
+
+    case AUTO_ROTATE_LEFT: {
+      // Step 2: Spin Left ~60 degrees to scan Left clearance
+      spinLeft(200);
+      currentAction = "AUTO: LOOKING LEFT";
       if (now - autoStateTimer >= 380) {
         stopRover();
-        autoTurnDir = (random(0, 2) == 0) ? 1 : -1;
-        autoState = AUTO_TURN;
+        autoState = AUTO_MEASURE_LEFT;
         autoStateTimer = now;
       }
       break;
     }
 
-    case AUTO_TURN: {
-      // Step 2: Spin turn away for 420ms
-      if (autoTurnDir == 1) {
-        spinRight(200);
-        currentAction = "AUTO: TURNING RIGHT";
-      } else {
-        spinLeft(200);
-        currentAction = "AUTO: TURNING LEFT";
-      }
-      if (now - autoStateTimer >= 420) {
-        stopRover();
-        autoState = AUTO_VERIFY;
-        autoStateTimer = now;
-      }
-      break;
-    }
-
-    case AUTO_VERIFY: {
-      // Step 3: Brief 150ms verification of newly targeted path
+    case AUTO_MEASURE_LEFT: {
       stopRover();
-      currentAction = "AUTO: VERIFYING PATH";
-      if (now - autoStateTimer >= 150) {
-        bool stillBlocked = (currentDistance > 0 && currentDistance <= 25.0) || (currentIR == 0);
-        if (stillBlocked) {
-          // Still an obstacle in front - turn more
-          autoState = AUTO_TURN;
+      currentAction = "AUTO: MEASURING LEFT GAP";
+      // Allow chassis vibrations to settle before ultrasonic ping
+      if (now - autoStateTimer >= 80) {
+        float d = readUltrasonic();
+        scanDistLeft = (d > 0) ? d : 300.0; // No echo = wide-open corridor
+        autoState = AUTO_ROTATE_RIGHT;
+        autoStateTimer = now;
+      }
+      break;
+    }
+
+    case AUTO_ROTATE_RIGHT: {
+      // Step 3: Spin Right across center to scan Right clearance
+      spinRight(200);
+      currentAction = "AUTO: LOOKING RIGHT";
+      if (now - autoStateTimer >= 760) {
+        stopRover();
+        autoState = AUTO_MEASURE_RIGHT;
+        autoStateTimer = now;
+      }
+      break;
+    }
+
+    case AUTO_MEASURE_RIGHT: {
+      stopRover();
+      currentAction = "AUTO: MEASURING RIGHT GAP";
+      if (now - autoStateTimer >= 80) {
+        float d = readUltrasonic();
+        scanDistRight = (d > 0) ? d : 300.0;
+
+        // Step 4: Spatial gap evaluation
+        if (scanDistLeft <= 22.0 && scanDistRight <= 22.0) {
+          // Both Left and Right are blocked - trapped in corner / dead end!
+          autoState = AUTO_DEADEND_TURN;
+          autoStateTimer = now;
+        } else if (scanDistLeft > scanDistRight) {
+          // Left corridor has greater clearance: rotate back to Left
+          autoState = AUTO_ROUTING_TURN;
           autoStateTimer = now;
         } else {
-          // Path clear - resume cruising
+          // Right corridor has greater or equal clearance: already facing Right!
+          currentAction = "GAP CHOSEN: RIGHT (" + String((int)scanDistRight) + "cm)";
           autoState = AUTO_CRUISE;
         }
+      }
+      break;
+    }
+
+    case AUTO_ROUTING_TURN: {
+      // Rotate left from Right side to align with Left corridor
+      spinLeft(200);
+      currentAction = "GAP CHOSEN: LEFT (" + String((int)scanDistLeft) + "cm)";
+      if (now - autoStateTimer >= 760) {
+        stopRover();
+        autoState = AUTO_CRUISE;
+      }
+      break;
+    }
+
+    case AUTO_DEADEND_TURN: {
+      // Perform escape 180-degree U-turn
+      spinRight(200);
+      currentAction = "DEAD END! ESCAPING 180°";
+      if (now - autoStateTimer >= 550) {
+        stopRover();
+        autoState = AUTO_CRUISE;
       }
       break;
     }
@@ -710,6 +770,8 @@ void handleTelemetry() {
   json += "\"action\":\"" + currentAction + "\",";
   json += "\"pwm\":" + String(currentPWM) + ",";
   json += "\"speed\":" + String(manualSpeed) + ",";
+  json += "\"gapL\":" + String(scanDistLeft, 1) + ",";
+  json += "\"gapR\":" + String(scanDistRight, 1) + ",";
   json += "\"mode\":\"" + String(currentMode == MODE_AUTONOMOUS ? "auto" : "manual") + "\"";
   json += "}";
   server.send(200, "application/json", json);
